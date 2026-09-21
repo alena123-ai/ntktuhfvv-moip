@@ -15,7 +15,7 @@ from telegram.ext import (
 #  КОНФИГ — впишите свои значения прямо здесь
 #  ВНИМАНИЕ: держите репозиторий ПРИВАТНЫМ!
 # ============================================================
-TELEGRAM_TOKEN    = "8996291992:AAGlR3xVNccvTOQHDq-vo4X9WYrF3Zq"
+TELEGRAM_TOKEN    = "8996291992:AAGlR3xVNccvT0QHDq-vo4X9WYrSwMr3Zg"
 GIGACHAT_AUTH_KEY = "MDFhMGMyZWMtMGFhMy03YTUxLThiNzYtNWQ0NDIwNGYzMjNjOmFhOTQxMzg3LTBmZjUtNDk3Yi1hMDYxLWRlNjYyNjI2OWRmMA=="   # Base64 из Sber Studio
 GIGACHAT_SCOPE    = "GIGACHAT_API_PERS"
 
