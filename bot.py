@@ -1,167 +1,161 @@
-import asyncio
-import time
-import uuid
-import httpx
+import os
+import logging
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
     MessageHandler,
     filters,
     ContextTypes,
 )
+from openai import OpenAI
 
-# ============================================================
-#  КОНФИГ — впишите свои значения прямо здесь
-#  ВНИМАНИЕ: держите репозиторий ПРИВАТНЫМ!
-# ============================================================
+# ---------- Загрузка переменных окружения ----------
+load_dotenv()
+
 TELEGRAM_TOKEN    = "8996291992:AAHNa_fAbtYzH9DUTfctv59lb5P8dG5z4i8"
 GIGACHAT_AUTH_KEY = "MDFhMGMyZWMtMGFhMy03YTUxLThiNzYtNWQ0NDIwNGYzMjNjOmFhOTQxMzg3LTBmZjUtNDk3Yi1hMDYxLWRlNjYyNjI2OWRmMA=="   # Base64 из Sber Studio
 GIGACHAT_SCOPE    = "GIGACHAT_API_PERS"
 
-# Как часто обновлять токен (в секундах)
-TOKEN_REFRESH_INTERVAL = 30 * 60      # обновляем каждые 30 минут
-TOKEN_STALE_AFTER      = 25 * 60      # считаем токен устаревшим через 25 минут
+# ---------- Логирование ----------
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-GIGACHAT_OAUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-GIGACHAT_API_URL   = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+# ---------- Клиент OpenRouter ----------
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
 
-# ============================================================
-#  Глобальное состояние токена
-# ============================================================
-_token_lock = asyncio.Lock()
-_token = {
-    "value": None,
-    "issued_at": 0.0,
-}
+# Модель — можно менять на любую бесплатную с openrouter.ai/models
+MODEL_NAME = "mistralai/mistral-7b-instruct:free"
 
+# ---------- Health-сервер для Render ----------
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Bot is alive")
 
-async def refresh_token() -> str:
-    """Запрашивает новый access_token у GigaChat (Basic-авторизация)."""
-    headers = {
-        "Authorization": f"Basic {GIGACHAT_AUTH_KEY}",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "RqUID": str(uuid.uuid4()),
-    }
-    data = {"scope": GIGACHAT_SCOPE}
-
-    async with httpx.AsyncClient(verify=False, timeout=30) as client:
-        resp = await client.post(GIGACHAT_OAUTH_URL, headers=headers, data=data)
-        resp.raise_for_status()
-        payload = resp.json()
-
-    _token["value"] = payload["access_token"]
-    _token["issued_at"] = time.time()
-    print(f"[{time.strftime('%H:%M:%S')}] GigaChat token обновлён")
-    return _token["value"]
+    def log_message(self, format, *args):
+        # Отключаем стандартный лог http-сервера, чтобы не засорять логи
+        return
 
 
-async def get_token() -> str:
-    """Возвращает актуальный токен, обновляя его при необходимости."""
-    async with _token_lock:
-        age = time.time() - _token["issued_at"]
-        if not _token["value"] or age > TOKEN_STALE_AFTER:
-            await refresh_token()
-        return _token["value"]
+def run_health_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    logger.info(f"Health-сервер запущен на порту {PORT}")
+    server.serve_forever()
 
 
-async def token_refresher_loop():
-    """Фоновая задача: обновляет токен каждые 30 минут."""
-    try:
-        async with _token_lock:
-            await refresh_token()
-    except Exception as e:
-        print(f"Не удалось получить токен при старте: {e}")
-
-    while True:
-        await asyncio.sleep(TOKEN_REFRESH_INTERVAL)
-        try:
-            async with _token_lock:
-                await refresh_token()
-        except Exception as e:
-            print(f"Ошибка обновления токена: {e}")
-
-
-# ============================================================
-#  GigaChat API
-# ============================================================
-async def ask_gigachat(prompt: str) -> str:
-    async def _do_request(token: str):
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        body = {
-            "model": "GigaChat",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,
-        }
-        async with httpx.AsyncClient(verify=False, timeout=60) as client:
-            return await client.post(GIGACHAT_API_URL, headers=headers, json=body)
-
-    token = await get_token()
-    resp = await _do_request(token)
-
-    # если токен внезапно протух — принудительно обновляем и повторяем один раз
-    if resp.status_code == 401:
-        async with _token_lock:
-            await refresh_token()
-            token = _token["value"]
-        resp = await _do_request(token)
-
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
-
-
-# ============================================================
-#  Telegram handlers
-# ============================================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я бот на GigaChat. Напиши мне что-нибудь.")
-
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.chat.send_action("typing")
-    try:
-        answer = await ask_gigachat(update.message.text)
-        await update.message.reply_text(answer)
-    except httpx.HTTPStatusError as e:
-        await update.message.reply_text(
-            f"GigaChat {e.response.status_code}:\n{e.response.text[:300]}"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка: {e}")
-
-
-async def on_startup(app):
-    app.bot_data["token_task"] = asyncio.create_task(token_refresher_loop())
-    print("Фоновая задача обновления токена запущена")
-
-
-async def on_shutdown(app):
-    task = app.bot_data.get("token_task")
-    if task:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-
-def main():
-    app = (
-        ApplicationBuilder()
-        .token(TELEGRAM_TOKEN)
-        .post_init(on_startup)
-        .post_shutdown(on_shutdown)
-        .build()
+# ---------- Обработчики Telegram ----------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    await update.message.reply_text(
+        f"Привет, {user.first_name}! 👋\n"
+        "Я ИИ-бот. Задай мне любой вопрос — я постараюсь ответить.\n\n"
+        "Команды:\n"
+        "/start — это сообщение\n"
+        "/help — помощь\n"
+        "/reset — сбросить контекст диалога"
     )
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("Бот запущен...")
-    app.run_polling()
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "Просто напиши мне свой вопрос текстом, и я отвечу.\n"
+        "Я не генерирую картинки — только текстовые ответы.\n"
+        "/reset — очистить историю диалога."
+    )
+
+
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.chat_data.clear()
+    context.user_data.clear()
+    await update.message.reply_text("🧹 История диалога очищена.")
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_message = update.message.text
+    if not user_message:
+        return
+
+    # Показываем "печатает..."
+    await update.message.chat.send_action(action="typing")
+
+    # Храним историю диалога в памяти (по чату)
+    history = context.chat_data.get("history", [])
+    history.append({"role": "user", "content": user_message})
+
+    # Ограничиваем историю, чтобы не превысить лимит токенов
+    history = history[-10:]
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты полезный ассистент. Отвечай на русском языке, "
+                        "кратко и по делу. Не генерируешь изображения."
+                    ),
+                },
+                *history,
+            ],
+            temperature=0.7,
+            max_tokens=1000,
+        )
+
+        ai_reply = response.choices[0].message.content.strip()
+        history.append({"role": "assistant", "content": ai_reply})
+        context.chat_data["history"] = history
+
+        # Telegram ограничивает длину сообщения 4096 символами
+        if len(ai_reply) > 4000:
+            for i in range(0, len(ai_reply), 4000):
+                await update.message.reply_text(ai_reply[i : i + 4000])
+        else:
+            await update.message.reply_text(ai_reply)
+
+    except Exception as e:
+        logger.error(f"Ошибка при обращении к OpenRouter: {e}")
+        await update.message.reply_text(
+            "⚠️ Извините, произошла ошибка при обработке запроса. "
+            "Попробуйте ещё раз через минуту."
+        )
+
+
+# ---------- Запуск ----------
+def main() -> None:
+    if not TELEGRAM_TOKEN:
+        raise RuntimeError("Не задан TELEGRAM_TOKEN в переменных окружения!")
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("Не задан OPENROUTER_API_KEY в переменных окружения!")
+
+    # Запускаем health-сервер в фоне (нужен для Render Web Service)
+    Thread(target=run_health_server, daemon=True).start()
+
+    # Создаём и настраиваем бота
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("reset", reset_command))
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    )
+
+    logger.info("Бот запущен. Нажмите Ctrl+C для остановки.")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
