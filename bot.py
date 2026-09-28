@@ -31,11 +31,11 @@ client = OpenAI(
     api_key=OPENROUTER_API_KEY,
 )
 
-# Модель — можно менять на любую бесплатную с openrouter.ai/models
+# Бесплатная модель OpenRouter. Можно заменить на любую с openrouter.ai/models
 MODEL_NAME = "mistralai/mistral-7b-instruct:free"
 
 
-# ---------- Health-сервер для Render ----------
+# ---------- Health-сервер (нужен для Render Web Service) ----------
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -44,7 +44,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is alive")
 
     def log_message(self, format, *args):
-        # Отключаем стандартный лог http-сервера
+        # Отключаем стандартный лог http-сервера, чтобы не засорять вывод
         return
 
 
@@ -54,7 +54,7 @@ def run_health_server():
     server.serve_forever()
 
 
-# ---------- Обработчики Telegram ----------
+# ---------- Команды бота ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     await update.message.reply_text(
@@ -81,6 +81,7 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text("🧹 История диалога очищена.")
 
 
+# ---------- Обработка сообщений ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_message = update.message.text
     if not user_message:
@@ -92,7 +93,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # История диалога в памяти (по чату)
     history = context.chat_data.get("history", [])
     history.append({"role": "user", "content": user_message})
-
     # Ограничиваем историю, чтобы не превысить лимит токенов
     history = history[-10:]
 
@@ -139,7 +139,7 @@ def main() -> None:
     if not OPENROUTER_API_KEY:
         raise RuntimeError("Не задан OPENROUTER_API_KEY в переменных окружения!")
 
-    # Запускаем health-сервер в фоне (нужен для Render Web Service)
+    # Health-сервер в фоне (для Render)
     Thread(target=run_health_server, daemon=True).start()
 
     # Создаём и настраиваем бота
