@@ -3,7 +3,6 @@ import logging
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -14,9 +13,7 @@ from telegram.ext import (
 )
 from openai import OpenAI
 
-# ---------- Загрузка переменных окружения ----------
-load_dotenv()
-
+# ---------- Переменные окружения ----------
 TELEGRAM_TOKEN    = "8996291992:AAHNa_fAbtYzH9DUTfctv59lb5P8dG5z4i8"
 GIGACHAT_AUTH_KEY = "MDFhMGMyZWMtMGFhMy03YTUxLThiNzYtNWQ0NDIwNGYzMjNjOmFhOTQxMzg3LTBmZjUtNDk3Yi1hMDYxLWRlNjYyNjI2OWRmMA=="   # Base64 из Sber Studio
 GIGACHAT_SCOPE    = "GIGACHAT_API_PERS"
@@ -37,6 +34,7 @@ client = OpenAI(
 # Модель — можно менять на любую бесплатную с openrouter.ai/models
 MODEL_NAME = "mistralai/mistral-7b-instruct:free"
 
+
 # ---------- Health-сервер для Render ----------
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -46,7 +44,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is alive")
 
     def log_message(self, format, *args):
-        # Отключаем стандартный лог http-сервера, чтобы не засорять логи
+        # Отключаем стандартный лог http-сервера
         return
 
 
@@ -91,7 +89,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Показываем "печатает..."
     await update.message.chat.send_action(action="typing")
 
-    # Храним историю диалога в памяти (по чату)
+    # История диалога в памяти (по чату)
     history = context.chat_data.get("history", [])
     history.append({"role": "user", "content": user_message})
 
